@@ -1,5 +1,12 @@
 # AI Code Review Agent
 
+![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-pipeline-8B5CF6)
+![Anthropic](https://img.shields.io/badge/Anthropic-Claude-FF6B35)
+![MongoDB](https://img.shields.io/badge/MongoDB-motor-47A248?logo=mongodb&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-yellow)
+
 A production-ready AI-powered code review service that analyses GitHub pull requests and posts structured reviews as PR comments.
 
 ## Features
@@ -13,6 +20,27 @@ A production-ready AI-powered code review service that analyses GitHub pull requ
 - FastAPI backend with `/review` and `/webhook/github` endpoints
 - LangGraph-compatible pipeline — ready for multi-agent composition
 - Prompt caching for Claude (cost reduction)
+
+---
+
+## Architecture
+
+```
+GitHub PR
+    │
+    ▼
+FastAPI  (/review  or  /webhook/github)
+    │
+    ▼
+LangGraph StateGraph Pipeline
+    │
+    ├── fetch_diff        (PyGithub → raw PR diff)
+    ├── llm_review        (Claude / GPT-4 structured analysis)
+    ├── parse_response    (JSON → Pydantic models)
+    ├── build_review      (CodeReview with scores)
+    ├── persist_review    (MongoDB via motor)
+    └── post_comment      (GitHub PR comment)
+```
 
 ---
 
@@ -54,7 +82,7 @@ Code_review_agent/
 ### 1. Clone & install
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Sudharsan2816/Code_review_agent
 cd Code_review_agent
 python -m venv .venv
 source .venv/bin/activate
@@ -121,11 +149,11 @@ curl -X POST http://localhost:8000/review \
     "pr_title": "Add user authentication",
     "final_verdict": "REQUEST_CHANGES",
     "scores": { "quality": 7, "security": 4, "performance": 8 },
-    "bugs": [...],
-    "security": [...],
-    "performance": [...],
-    "code_quality": [...],
-    "suggested_fixes": [...],
+    "bugs": [],
+    "security": [],
+    "performance": [],
+    "code_quality": [],
+    "suggested_fixes": [],
     "summary": "..."
   }
 }
