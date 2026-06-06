@@ -2,44 +2,234 @@
 
 ![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
-![LangGraph](https://img.shields.io/badge/LangGraph-pipeline-8B5CF6)
-![Anthropic](https://img.shields.io/badge/Anthropic-Claude-FF6B35)
+![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-8B5CF6)
+![Claude](https://img.shields.io/badge/Anthropic-Claude-FF6B35)
 ![MongoDB](https://img.shields.io/badge/MongoDB-motor-47A248?logo=mongodb&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 
-A production-ready AI-powered code review service that analyses GitHub pull requests and posts structured reviews as PR comments.
+> A LangGraph-powered autonomous code review agent that fetches GitHub PR diffs, generates structured AI analysis across five engineering dimensions, and posts formatted reviews as PR comments — with an optional human-in-the-loop approval gate.
 
-## Features
+---
 
-- Fetches PR diffs via PyGithub
-- Modular LLM support: **Anthropic Claude** (default) or **OpenAI GPT-4**
-- Structured review output: Bugs · Security · Performance · Code Quality · Suggested Fixes
-- Scoring system (1–10) for quality, security, and performance
-- Optional human approval gate before posting to GitHub
-- Review history stored in MongoDB
-- FastAPI backend with `/review` and `/webhook/github` endpoints
-- LangGraph-compatible pipeline — ready for multi-agent composition
-- Prompt caching for Claude (cost reduction)
+## The Problem
+
+Code review is a bottleneck at every engineering team:
+
+- PRs wait hours or days for human review
+- Junior engineers miss security vulnerabilities and performance issues
+- Reviewers burn time on style and formatting instead of logic and architecture
+- No consistent review depth across the team
+
+---
+
+## Solution
+
+A production FastAPI service with a LangGraph StateGraph pipeline that automatically reviews any GitHub PR on trigger — via webhook or API call — and posts a structured, scored review directly as a PR comment.
 
 ---
 
 ## Architecture
 
 ```
-GitHub PR
-    │
-    ▼
-FastAPI  (/review  or  /webhook/github)
-    │
-    ▼
-LangGraph StateGraph Pipeline
-    │
-    ├── fetch_diff        (PyGithub → raw PR diff)
-    ├── llm_review        (Claude / GPT-4 structured analysis)
-    ├── parse_response    (JSON → Pydantic models)
-    ├── build_review      (CodeReview with scores)
-    ├── persist_review    (MongoDB via motor)
-    └── post_comment      (GitHub PR comment)
+GitHub PR (opened / updated)
+         │
+         ▼
+POST /webhook/github   OR   POST /review
+         │
+         ▼
+   FastAPI (async)
+         │
+         ▼
+┌────────────────────────────────────────────────┐
+│            LangGraph StateGraph                │
+│                                                │
+│  ┌─────────────┐                               │
+│  │ fetch_diff  │  PyGithub → raw PR diff       │
+│  └──────┬──────┘  (up to 80K chars)           │
+│         │                                      │
+│  ┌──────▼──────┐                               │
+│  │ llm_review  │  Claude Sonnet (cached prompt)│
+│  │             │  or GPT-4o (JSON mode)        │
+│  └──────┬──────┘                               │
+│         │                                      │
+│  ┌──────▼──────┐                               │
+│  │    parse    │  JSON → Pydantic models       │
+│  └──────┬──────┘                               │
+│         │                                      │
+│  ┌──────▼──────┐                               │
+│  │ build_review│  CodeReview + scores          │
+│  └──────┬──────┘                               │
+│         │                                      │
+│  ┌──────▼──────┐                               │
+│  │   persist   │  MongoDB (motor async)        │
+│  └──────┬──────┘                               │
+│         │                                      │
+│    REQUIRE_HUMAN_APPROVAL?                     │
+│       /          \                             │
+│     yes           no                           │
+│      │             │                           │
+│  wait for      post_comment                    │
+│  /approve      (PyGithub → PR comment)         │
+└────────────────────────────────────────────────┘
+```
+
+---
+
+## Key Features
+
+| Feature | Detail |
+|---------|--------|
+| **5-dimension review** | Bugs · Security · Performance · Code Quality · Suggested Fixes |
+| **Scoring** | 1–10 scores for quality, security, and performance |
+| **Verdict** | `APPROVE` · `REQUEST_CHANGES` · `COMMENT` |
+| **Multi-LLM** | Anthropic Claude (default, prompt caching) or OpenAI GPT-4o |
+| **Human gate** | Optional approval hold before posting to GitHub |
+| **Review history** | Full MongoDB persistence with repo, PR, timestamp, verdict |
+| **Webhook** | Drop-in GitHub webhook — fully autonomous after one-time setup |
+| **Extensible** | LangGraph nodes make it easy to add static analysis, test generation, etc. |
+
+---
+
+## How It Works
+
+**Step 1 — Trigger**
+GitHub fires a webhook to `POST /webhook/github` when a PR is opened or updated. Alternatively, call `POST /review` directly with `repo_name` and `pr_number`.
+
+**Step 2 — Fetch Diff**
+`fetch_diff` authenticates with `GITHUB_TOKEN`, retrieves the raw PR diff via PyGithub. Diffs are truncated at 80K characters to prevent token overflow.
+
+**Step 3 — LLM Review**
+`llm_review` sends the diff and a structured review prompt to Claude (with ephemeral prompt caching on the system prompt) or GPT-4o in JSON mode. Output is a structured object with findings per category and 1–10 scores.
+
+**Step 4 — Parse and Build**
+`parse_response` strips markdown fences and decodes JSON. `build_review` assembles the validated `CodeReview` Pydantic model with per-finding `FindingItem` objects.
+
+**Step 5 — Persist**
+`persist_review` stores the full review in MongoDB with motor (async). Enables review history queries and audit trail.
+
+**Step 6 — Gate or Post**
+- `REQUIRE_HUMAN_APPROVAL=false` → `post_comment` formats and posts immediately
+- `REQUIRE_HUMAN_APPROVAL=true` → review waits; call `POST /review/approve` to release
+
+---
+
+## Sample PR Comment Output
+
+```
+## 🤖 AI Code Review — Add JWT authentication
+
+> Verdict: 🚨 REQUEST_CHANGES
+
+Adds JWT auth but token expiry is not validated server-side, and /login has
+no rate limiting — creating an exploitable auth bypass and brute-force surface.
+
+### Scores
+| Dimension    | Score |
+|--------------|-------|
+| Code Quality | 7/10  |
+| Security     | 4/10  |
+| Performance  | 8/10  |
+
+### 🐛 Bugs (2)
+- `verify_token()`: expired tokens accepted — add `options={"verify_exp": True}`
+- `get_user()`: SQL query uses string concatenation in one edge case — parameterize
+
+### 🔐 Security (1)
+- No rate limiting on POST /login → brute-force attack surface
+
+### ⚡ Performance (1)
+- N+1 query in user list endpoint — add select_related or batch fetch
+
+### 🧹 Code Quality (2)
+- Token TTL hardcoded as magic number — extract to config constant
+- `validate_user()` is 120 lines — split into focused functions
+
+### Suggested Fixes
+...
+```
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| Orchestration | LangGraph StateGraph |
+| AI | Claude `claude-sonnet-4-6` (Anthropic) / OpenAI GPT-4o |
+| Prompt Optimization | Anthropic ephemeral prompt caching |
+| GitHub Integration | PyGithub |
+| API | FastAPI (async) |
+| Database | MongoDB via motor (async) |
+| Validation | Pydantic v2 |
+| Runtime | Python 3.11+ |
+
+---
+
+## Setup
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/Sudharsan2816/Code_review_agent
+cd Code_review_agent
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. Configure
+
+```bash
+cp .env.example .env
+# Required: GITHUB_TOKEN, ANTHROPIC_API_KEY, MONGODB_URI
+```
+
+### 3. Start MongoDB
+
+```bash
+docker run -d -p 27017:27017 mongo:7
+```
+
+### 4. Run
+
+```bash
+mkdir -p logs
+uvicorn app.main:app --reload --port 8000
+# API docs: http://localhost:8000/docs
+```
+
+### 5. Add GitHub Webhook
+
+In your target repo → Settings → Webhooks → Add webhook:
+- **Payload URL:** `https://your-server/webhook/github`
+- **Content type:** `application/json`
+- **Events:** Pull requests
+- **Secret:** your `GITHUB_WEBHOOK_SECRET`
+
+---
+
+## API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/review` | Trigger review by repo + PR number |
+| `GET` | `/review/{id}` | Fetch a stored review |
+| `GET` | `/review?repo=owner/repo` | List review history |
+| `POST` | `/review/approve` | Post a held review to GitHub |
+| `POST` | `/webhook/github` | GitHub webhook receiver |
+
+---
+
+## LLM Configuration
+
+```bash
+# Claude (default) — prompt caching enabled
+LLM_PROVIDER=claude
+ANTHROPIC_API_KEY=sk-ant-...
+
+# GPT-4o — JSON mode
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o
 ```
 
 ---
@@ -49,223 +239,27 @@ LangGraph StateGraph Pipeline
 ```
 Code_review_agent/
 ├── app/
-│   ├── main.py                  # FastAPI application entry point
-│   ├── config.py                # Pydantic settings (env vars)
-│   ├── models/
-│   │   ├── review.py            # CodeReview, Scores, FindingItem, …
-│   │   └── webhook.py           # GitHub webhook payload models
-│   ├── services/
-│   │   ├── github_service.py    # PyGithub: fetch diff, post comment
-│   │   ├── db_service.py        # MongoDB (motor) persistence
-│   │   ├── review_service.py    # Orchestration: GitHub → LLM → DB → GitHub
-│   │   └── llm/
-│   │       ├── base.py          # Abstract LLM interface
-│   │       ├── claude_client.py # Anthropic Claude with prompt caching
-│   │       └── openai_client.py # OpenAI GPT-4 with JSON mode
+│   ├── main.py                   # FastAPI entry point
+│   ├── config.py                 # Pydantic settings (env vars)
 │   ├── agents/
-│   │   └── review_agent.py      # LangGraph StateGraph pipeline
-│   ├── api/
-│   │   └── routes/
-│   │       ├── review.py        # POST /review, GET /review/{id}
-│   │       └── webhook.py       # POST /webhook/github
+│   │   └── review_agent.py       # LangGraph StateGraph definition
+│   ├── api/routes/
+│   │   ├── review.py             # POST /review, GET /review, POST /approve
+│   │   └── webhook.py            # POST /webhook/github
+│   ├── models/
+│   │   ├── review.py             # CodeReview, Scores, FindingItem
+│   │   └── webhook.py            # GitHub webhook payload models
+│   ├── services/
+│   │   ├── github_service.py     # PyGithub: fetch diff, post comment
+│   │   ├── db_service.py         # MongoDB persistence
+│   │   ├── review_service.py     # Orchestration logic
+│   │   └── llm/
+│   │       ├── base.py           # Abstract LLM interface
+│   │       ├── claude_client.py  # Anthropic with prompt caching
+│   │       └── openai_client.py  # OpenAI GPT-4o with JSON mode
 │   └── utils/
-│       └── markdown.py          # CodeReview → GitHub markdown renderer
+│       └── markdown.py           # CodeReview → GitHub comment formatter
 ├── requirements.txt
 ├── .env.example
 └── README.md
-```
-
----
-
-## Setup
-
-### 1. Clone & install
-
-```bash
-git clone https://github.com/Sudharsan2816/Code_review_agent
-cd Code_review_agent
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-# Edit .env and fill in your API keys
-```
-
-Required variables:
-
-| Variable | Description |
-|---|---|
-| `GITHUB_TOKEN` | GitHub Personal Access Token (repo scope) |
-| `ANTHROPIC_API_KEY` | Anthropic API key (if using Claude) |
-| `OPENAI_API_KEY` | OpenAI API key (if using GPT-4) |
-| `LLM_PROVIDER` | `claude` (default) or `openai` |
-| `MONGODB_URI` | MongoDB connection string |
-
-### 3. Start MongoDB
-
-```bash
-docker run -d -p 27017:27017 --name mongo mongo:7
-```
-
-### 4. Run the server
-
-```bash
-mkdir -p logs
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-API docs available at `http://localhost:8000/docs`
-
----
-
-## API Reference
-
-### `POST /review`
-
-Trigger a code review for a pull request.
-
-```bash
-curl -X POST http://localhost:8000/review \
-  -H "Content-Type: application/json" \
-  -d '{
-    "repo_name": "owner/repo",
-    "pr_number": 42,
-    "post_comment": true
-  }'
-```
-
-**Response:**
-```json
-{
-  "review_id": "664f1a2b3c4d5e6f7a8b9c0d",
-  "review": {
-    "repo": "owner/repo",
-    "pr_number": 42,
-    "pr_title": "Add user authentication",
-    "final_verdict": "REQUEST_CHANGES",
-    "scores": { "quality": 7, "security": 4, "performance": 8 },
-    "bugs": [],
-    "security": [],
-    "performance": [],
-    "code_quality": [],
-    "suggested_fixes": [],
-    "summary": "..."
-  }
-}
-```
-
-### `GET /review/{review_id}`
-
-Retrieve a stored review.
-
-```bash
-curl http://localhost:8000/review/664f1a2b3c4d5e6f7a8b9c0d
-```
-
-### `GET /review?repo=owner/repo&limit=20&skip=0`
-
-List review history with optional filtering.
-
-```bash
-curl "http://localhost:8000/review?repo=owner/repo&limit=10"
-```
-
-### `POST /review/approve`
-
-Approve a pending review (when `REQUIRE_HUMAN_APPROVAL=true`).
-
-```bash
-curl -X POST http://localhost:8000/review/approve \
-  -H "Content-Type: application/json" \
-  -d '{"review_id": "664f1a2b3c4d5e6f7a8b9c0d", "approved_by": "alice"}'
-```
-
-### `POST /webhook/github`
-
-GitHub webhook endpoint. Configure in your repo:
-
-- **Payload URL:** `https://your-server/webhook/github`
-- **Content type:** `application/json`
-- **Events:** Pull requests
-- **Secret:** value of `GITHUB_WEBHOOK_SECRET`
-
----
-
-## Human Approval Flow
-
-Set `REQUIRE_HUMAN_APPROVAL=true` in `.env`.
-
-Reviews are analysed and saved to MongoDB but **not** posted to GitHub automatically. Use `POST /review/approve` to post after review.
-
----
-
-## Switching LLM Providers
-
-```bash
-# Use Claude (default)
-LLM_PROVIDER=claude
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Use OpenAI GPT-4
-LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o
-```
-
----
-
-## LangGraph Agent
-
-The `app/agents/review_agent.py` module exposes a compiled `StateGraph`:
-
-```python
-from app.agents.review_agent import review_graph
-
-result = await review_graph.ainvoke({
-    "repo": "owner/repo",
-    "pr_number": 42,
-    "post_comment": True,
-    "pr_diff": None,
-    "raw_llm_response": "",
-    "parsed_data": {},
-    "review": None,
-    "review_id": "",
-    "error": "",
-    "logs": [],
-})
-print(result["review"].final_verdict)
-```
-
-The linear pipeline (`fetch_diff → llm_review → parse_response → build_review → persist_review → post_comment`) can be extended with parallel branches (e.g. static analysis, test generation) by adding nodes and edges to the graph.
-
----
-
-## Review Output Format
-
-The GitHub PR comment follows this structure:
-
-```
-## 🤖 AI Code Review — <PR Title>
-
-> Verdict: 🚨 REQUEST_CHANGES
-
-<summary>
-
-### Scores
-| Dimension    | Score |
-|--------------|-------|
-| Code Quality | 7/10  |
-| Security     | 4/10  |
-| Performance  | 8/10  |
-
-### 🐛 Bugs
-### 🔐 Security
-### ⚡ Performance
-### 🧹 Code Quality
-### Suggested Fixes
 ```
