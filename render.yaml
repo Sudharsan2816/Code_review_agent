@@ -4,6 +4,7 @@ services:
     runtime: docker
     plan: free
     region: singapore
+    repo: https://github.com/Sudharsan2816/Code_review_agent
     branch: agent/code-review-deployment
     dockerfilePath: ./Dockerfile
     dockerContext: .
