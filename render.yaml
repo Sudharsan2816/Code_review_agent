@@ -4,6 +4,7 @@ services:
     runtime: docker
     plan: free
     region: singapore
+    branch: agent/code-review-deployment
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
