@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     github_token: str = ""
     github_webhook_secret: str = ""
 
-    # LLM Provider: "claude" or "openai"
-    llm_provider: Literal["claude", "openai"] = "claude"
+    # LLM Provider: "claude", "openai", or NVIDIA's OpenAI-compatible API
+    llm_provider: Literal["claude", "openai", "nvidia"] = "claude"
 
     # Anthropic / Claude
     anthropic_api_key: str = ""
@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
+
+    # NVIDIA NIM
+    nvidia_api_key: str = ""
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    nvidia_model: str = "nvidia/llama-3.3-nemotron-super-49b-v1"
 
     # MongoDB
     mongodb_uri: str = "mongodb://localhost:27017"
@@ -44,7 +49,18 @@ class Settings(BaseSettings):
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    api_auth_token: str = ""
+    cors_allowed_origins: str = "http://localhost:8000"
     debug: bool = False
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Return the explicitly configured browser origins."""
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ] or ["http://localhost:8000"]
 
 
 @lru_cache(maxsize=1)

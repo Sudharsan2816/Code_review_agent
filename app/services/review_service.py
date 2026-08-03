@@ -8,6 +8,7 @@ from app.services.db_service import DatabaseService
 from app.services.github_service import GitHubService, PRDiff
 from app.services.llm.base import BaseLLMClient
 from app.services.llm.claude_client import ClaudeClient
+from app.services.llm.nvidia_client import NvidiaClient
 from app.services.llm.openai_client import OpenAIClient
 from app.utils.markdown import review_to_markdown
 
@@ -17,6 +18,8 @@ def _build_llm_client() -> BaseLLMClient:
     provider = get_settings().llm_provider
     if provider == "openai":
         return OpenAIClient()
+    if provider == "nvidia":
+        return NvidiaClient()
     return ClaudeClient()
 
 

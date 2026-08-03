@@ -45,7 +45,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_settings().cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -54,10 +55,26 @@ app.include_router(review_router)
 app.include_router(webhook_router)
 
 
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
 @app.get("/health", tags=["system"])
 async def health_check():
     """Liveness probe."""
-    return {"status": "ok", "version": "1.0.0"}
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "provider": settings.llm_provider,
+        "api_auth_configured": bool(settings.api_auth_token),
+        "webhook_secret_configured": bool(settings.github_webhook_secret),
+    }
 
 
 @app.on_event("startup")
