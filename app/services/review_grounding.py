@@ -1,6 +1,7 @@
 """Deterministic grounding and verdict calibration for LLM review output."""
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 import re
 
 from loguru import logger
@@ -12,6 +13,45 @@ from app.services.github_service import PRDiff
 _FINDING_CATEGORIES = ("bugs", "security", "performance", "code_quality")
 _SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_DOCUMENTATION_SUFFIXES = {".md", ".markdown", ".rst", ".adoc"}
+_DOCUMENTATION_NAMES = {
+    "readme",
+    "changelog",
+    "contributing",
+    "code_of_conduct",
+    "license",
+    "security",
+}
+_METADATA_NAMES = {".gitignore", ".gitattributes", ".editorconfig"}
+_DOCUMENTATION_TERMS = {
+    "badge",
+    "broken link",
+    "command",
+    "documentation",
+    "example",
+    "formatting",
+    "grammar",
+    "heading",
+    "instruction",
+    "link",
+    "prerequisite",
+    "readme",
+    "setup",
+    "spelling",
+    "typo",
+    "wording",
+}
+_METADATA_TERMS = {
+    "artifact",
+    "credential",
+    "editorconfig",
+    "environment file",
+    "generated file",
+    "gitattributes",
+    "gitignore",
+    "ignore rule",
+    "secret",
+}
 
 
 @dataclass(frozen=True)
@@ -47,6 +87,37 @@ def _normalise_evidence(value: str) -> str:
     if value.startswith(("+", "-")):
         value = value[1:]
     return " ".join(value.split())
+
+
+def _non_code_terms(filename: str) -> set[str] | None:
+    """Return allowed review concepts for documentation/metadata files."""
+    path = PurePosixPath(filename.lower())
+    stem = path.stem
+    if path.suffix in _DOCUMENTATION_SUFFIXES or stem in _DOCUMENTATION_NAMES:
+        return _DOCUMENTATION_TERMS
+    if path.name in _METADATA_NAMES:
+        return _METADATA_TERMS
+    return None
+
+
+def _is_file_specific_non_code_finding(filename: str, raw: dict) -> bool:
+    """Reject claims about application behaviour inferred from prose or metadata."""
+    allowed_terms = _non_code_terms(filename)
+    if allowed_terms is None:
+        return True
+    description = str(raw.get("description") or "").lower()
+    return any(term in description for term in allowed_terms)
+
+
+def _is_file_specific_non_code_fix(filename: str, raw: dict) -> bool:
+    allowed_terms = _non_code_terms(filename)
+    if allowed_terms is None:
+        return True
+    fix_text = " ".join(
+        str(raw.get(field) or "").lower()
+        for field in ("issue", "improved", "explanation")
+    )
+    return any(term in fix_text for term in allowed_terms)
 
 
 def _changed_lines(diff_text: str) -> dict[str, list[ChangedLine]]:
@@ -99,6 +170,7 @@ def _match_changed_line(evidence: str, lines: list[ChangedLine]) -> ChangedLine 
 def _ground_findings(
     raw_items: object,
     changed: dict[str, list[ChangedLine]],
+    category: str,
 ) -> tuple[list[FindingItem], int]:
     grounded: list[FindingItem] = []
     dropped = 0
@@ -121,6 +193,19 @@ def _ground_findings(
             )
             dropped += 1
             continue
+        if _non_code_terms(filename) is not None:
+            if category != "code_quality" or not _is_file_specific_non_code_finding(
+                filename, raw
+            ):
+                logger.warning(
+                    "Dropping application-code claim inferred from non-code file={}",
+                    filename,
+                )
+                dropped += 1
+                continue
+            # Documentation and repository metadata findings are advisory only.
+            if _SEVERITY_RANK[severity] > _SEVERITY_RANK["medium"]:
+                severity = "medium"
         try:
             grounded.append(
                 FindingItem(
@@ -164,6 +249,13 @@ def _ground_fixes(
             logger.warning("Dropping ungrounded suggested fix file={}", filename or "<missing>")
             dropped += 1
             continue
+        if not _is_file_specific_non_code_fix(filename, raw):
+            logger.warning(
+                "Dropping application-code fix inferred from non-code file={}",
+                filename,
+            )
+            dropped += 1
+            continue
         try:
             grounded.append(
                 SuggestedFix(
@@ -195,7 +287,9 @@ def ground_review_data(data: dict, pr_diff: PRDiff) -> GroundedReviewData:
     dropped = 0
 
     for category in _FINDING_CATEGORIES:
-        items, category_dropped = _ground_findings(data.get(category, []), changed)
+        items, category_dropped = _ground_findings(
+            data.get(category, []), changed, category
+        )
         grounded_by_category[category] = items
         dropped += category_dropped
 

@@ -46,6 +46,33 @@ def _base_payload() -> dict:
     }
 
 
+def _python_diff() -> PRDiff:
+    patch = """@@ -1,2 +1,3 @@
+ def authenticate(token):
++    return decode(token, options={})
+"""
+    return PRDiff(
+        repo="owner/repo",
+        pr_number=2,
+        pr_title="Update authentication",
+        pr_url="https://github.com/owner/repo/pull/2",
+        author="owner",
+        base_branch="main",
+        head_branch="auth",
+        files_changed=[
+            {
+                "filename": "app/auth.py",
+                "status": "modified",
+                "additions": 1,
+                "deletions": 0,
+                "changes": 1,
+                "patch": patch,
+            }
+        ],
+        diff_text=f"--- a/app/auth.py\n+++ b/app/auth.py\n{patch}",
+    )
+
+
 def test_grounding_drops_findings_for_files_outside_the_pr_diff():
     payload = _base_payload()
     payload["security"] = [
@@ -91,19 +118,48 @@ def test_high_severity_finding_requires_changes_only_when_evidence_matches():
     payload = _base_payload()
     payload["security"] = [
         {
+            "file": "app/auth.py",
+            "line": 999,
+            "evidence": "return decode(token, options={})",
+            "description": "Token expiry validation is disabled.",
+            "severity": "high",
+        }
+    ]
+
+    grounded = ground_review_data(payload, _python_diff())
+
+    assert len(grounded.security) == 1
+    assert grounded.security[0].line == 2
+    assert grounded.final_verdict == Verdict.REQUEST_CHANGES
+
+
+def test_readme_cannot_be_used_as_evidence_for_application_code_claims():
+    payload = _base_payload()
+    payload["security"] = [
+        {
             "file": "README.md",
             "line": 999,
             "evidence": "New setup text",
-            "description": "The new setup text exposes a real high-risk instruction.",
-            "severity": "high",
+            "description": "The login endpoint accepts expired JWT tokens.",
+            "severity": "critical",
+        }
+    ]
+    payload["suggested_fixes"] = [
+        {
+            "file": "README.md",
+            "issue": "JWT expiry validation",
+            "original": "New setup text",
+            "improved": "Change the application token decoder.",
+            "explanation": "Prevents unauthorized application access.",
         }
     ]
 
     grounded = ground_review_data(payload, _readme_diff())
 
-    assert len(grounded.security) == 1
-    assert grounded.security[0].line == 3
-    assert grounded.final_verdict == Verdict.REQUEST_CHANGES
+    assert grounded.security == []
+    assert grounded.suggested_fixes == []
+    assert grounded.dropped_items == 2
+    assert grounded.final_verdict == Verdict.APPROVE
 
 
 def test_suggested_fix_must_quote_an_exact_changed_line():
@@ -138,3 +194,4 @@ def test_prompt_requires_exact_changed_line_evidence():
     assert "Allowed changed files" in prompt
     assert "exact changed line into the evidence field" in prompt
     assert "merely mentioned by documentation" in prompt
+    assert "application risk is not evidence" in prompt

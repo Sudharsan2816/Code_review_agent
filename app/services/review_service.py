@@ -43,7 +43,10 @@ def _build_prompt(pr_diff: PRDiff) -> str:
         f"Unified diff:\n```diff\n{pr_diff.diff_text}\n```\n\n"
         "Analyse only added/deleted lines in this diff. For every finding, copy one "
         "exact changed line into the evidence field. Do not report issues in files or "
-        "code that are merely mentioned by documentation. Produce the JSON review."
+        "code that are merely mentioned by documentation. For documentation or "
+        "repository-metadata files, report only defects in that documentation or "
+        "metadata under code_quality with low/medium severity. Text describing an "
+        "application risk is not evidence that the risk exists. Produce the JSON review."
     )
 
 
