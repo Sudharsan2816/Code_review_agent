@@ -1,14 +1,18 @@
 """Core orchestration service that ties GitHub, LLM, and DB together."""
 
+import asyncio
+
 from loguru import logger
 
 from app.config import get_settings
-from app.models.review import CodeReview, Scores, Verdict, FindingItem, SuggestedFix
+from app.models.review import CodeReview
 from app.services.db_service import DatabaseService
 from app.services.github_service import GitHubService, PRDiff
 from app.services.llm.base import BaseLLMClient
 from app.services.llm.claude_client import ClaudeClient
+from app.services.llm.nvidia_client import NvidiaClient
 from app.services.llm.openai_client import OpenAIClient
+from app.services.review_grounding import ground_review_data
 from app.utils.markdown import review_to_markdown
 
 
@@ -17,6 +21,8 @@ def _build_llm_client() -> BaseLLMClient:
     provider = get_settings().llm_provider
     if provider == "openai":
         return OpenAIClient()
+    if provider == "nvidia":
+        return NvidiaClient()
     return ClaudeClient()
 
 
@@ -34,20 +40,16 @@ def _build_prompt(pr_diff: PRDiff) -> str:
         f"Author     : {pr_diff.author}\n"
         f"Base branch: {pr_diff.base_branch}\n"
         f"Head branch: {pr_diff.head_branch}\n\n"
-        f"Files changed:\n{file_list}\n\n"
+        f"Allowed changed files (findings must use one of these exact paths):\n"
+        f"{file_list}\n\n"
         f"Unified diff:\n```diff\n{pr_diff.diff_text}\n```\n\n"
-        "Analyse the diff thoroughly and produce the JSON review."
+        "Analyse only added/deleted lines in this diff. For every finding, copy one "
+        "exact changed line into the evidence field. Do not report issues in files or "
+        "code that are merely mentioned by documentation. For documentation or "
+        "repository-metadata files, report only defects in that documentation or "
+        "metadata under code_quality with low/medium severity. Text describing an "
+        "application risk is not evidence that the risk exists. Produce the JSON review."
     )
-
-
-def _parse_findings(raw_list: list[dict], cls) -> list:
-    items = []
-    for entry in raw_list:
-        try:
-            items.append(cls(**entry))
-        except Exception as exc:
-            logger.warning(f"Skipping malformed finding {entry}: {exc}")
-    return items
 
 
 class ReviewService:
@@ -78,32 +80,33 @@ class ReviewService:
 
         # 2. Build prompt and call LLM
         prompt = _build_prompt(pr_diff)
-        raw = await self._llm.generate_review(prompt)
+        try:
+            async with asyncio.timeout(self._settings.llm_timeout_seconds):
+                raw = await self._llm.generate_review(prompt)
+        except TimeoutError as exc:
+            timeout = self._settings.llm_timeout_seconds
+            logger.error("LLM provider timed out after {} seconds", timeout)
+            raise TimeoutError(
+                f"LLM provider timed out after {timeout:g} seconds"
+            ) from exc
 
         # 3. Parse structured response
         data = await self._llm.parse_review_response(raw)
-
-        scores_raw = data.get("scores", {})
+        grounded = ground_review_data(data, pr_diff)
         review = CodeReview(
             repo=repo_name,
             pr_number=pr_number,
             pr_title=pr_diff.pr_title,
             pr_url=pr_diff.pr_url,
             llm_provider=self._settings.llm_provider,
-            bugs=_parse_findings(data.get("bugs", []), FindingItem),
-            security=_parse_findings(data.get("security", []), FindingItem),
-            performance=_parse_findings(data.get("performance", []), FindingItem),
-            code_quality=_parse_findings(data.get("code_quality", []), FindingItem),
-            suggested_fixes=_parse_findings(
-                data.get("suggested_fixes", []), SuggestedFix
-            ),
-            scores=Scores(
-                quality=max(1, min(10, int(scores_raw.get("quality", 5)))),
-                security=max(1, min(10, int(scores_raw.get("security", 5)))),
-                performance=max(1, min(10, int(scores_raw.get("performance", 5)))),
-            ),
-            final_verdict=Verdict(data.get("final_verdict", "COMMENT")),
-            summary=data.get("summary", ""),
+            bugs=grounded.bugs,
+            security=grounded.security,
+            performance=grounded.performance,
+            code_quality=grounded.code_quality,
+            suggested_fixes=grounded.suggested_fixes,
+            scores=grounded.scores,
+            final_verdict=grounded.final_verdict,
+            summary=grounded.summary,
         )
 
         # 4. Persist to MongoDB

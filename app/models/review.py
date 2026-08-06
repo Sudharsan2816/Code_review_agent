@@ -22,6 +22,7 @@ class Scores(BaseModel):
 class FindingItem(BaseModel):
     file: Optional[str] = None
     line: Optional[int] = None
+    evidence: Optional[str] = None
     description: str
     severity: Optional[str] = None  # "low" | "medium" | "high" | "critical"
 

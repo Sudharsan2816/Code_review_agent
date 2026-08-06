@@ -36,6 +36,8 @@ def _render_findings(title: str, items: list[FindingItem]) -> str:
         location_text = f" - {location}" if location else ""
         prefix = f"{badge} " if badge else ""
         lines.append(f"- {prefix}{item.description}{location_text}")
+        if item.evidence:
+            lines.append(f"  - Evidence: `{item.evidence}`")
     return "\n".join(lines) + "\n"
 
 
