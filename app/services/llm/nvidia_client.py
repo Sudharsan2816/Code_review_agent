@@ -16,6 +16,8 @@ class NvidiaClient(BaseLLMClient):
         self._client = AsyncOpenAI(
             api_key=settings.nvidia_api_key,
             base_url=settings.nvidia_base_url,
+            timeout=settings.llm_timeout_seconds,
+            max_retries=0,
         )
         self._model = settings.nvidia_model
 

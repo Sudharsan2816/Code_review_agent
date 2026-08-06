@@ -1,5 +1,7 @@
 """Core orchestration service that ties GitHub, LLM, and DB together."""
 
+import asyncio
+
 from loguru import logger
 
 from app.config import get_settings
@@ -78,7 +80,15 @@ class ReviewService:
 
         # 2. Build prompt and call LLM
         prompt = _build_prompt(pr_diff)
-        raw = await self._llm.generate_review(prompt)
+        try:
+            async with asyncio.timeout(self._settings.llm_timeout_seconds):
+                raw = await self._llm.generate_review(prompt)
+        except TimeoutError as exc:
+            timeout = self._settings.llm_timeout_seconds
+            logger.error("LLM provider timed out after {} seconds", timeout)
+            raise TimeoutError(
+                f"LLM provider timed out after {timeout:g} seconds"
+            ) from exc
 
         # 3. Parse structured response
         data = await self._llm.parse_review_response(raw)

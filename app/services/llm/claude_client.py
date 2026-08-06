@@ -37,7 +37,11 @@ class ClaudeClient(BaseLLMClient):
 
     def __init__(self) -> None:
         settings = get_settings()
-        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self._client = anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key,
+            timeout=settings.llm_timeout_seconds,
+            max_retries=0,
+        )
         self._model = settings.claude_model
 
     async def generate_review(self, prompt: str) -> str:

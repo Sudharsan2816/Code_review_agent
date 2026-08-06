@@ -45,6 +45,8 @@ class Settings(BaseSettings):
 
     # Max diff characters sent to LLM (prevents token overflow)
     max_diff_chars: int = 80_000
+    # Hard upper bound for one provider call so a slow LLM cannot hang a worker.
+    llm_timeout_seconds: float = 180.0
 
     # API
     api_host: str = "0.0.0.0"

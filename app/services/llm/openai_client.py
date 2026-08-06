@@ -37,7 +37,11 @@ class OpenAIClient(BaseLLMClient):
 
     def __init__(self) -> None:
         settings = get_settings()
-        self._client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self._client = AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            timeout=settings.llm_timeout_seconds,
+            max_retries=0,
+        )
         self._model = settings.openai_model
 
     async def generate_review(self, prompt: str) -> str:

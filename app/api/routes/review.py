@@ -34,6 +34,9 @@ async def create_review(
             post_comment=body.post_comment,
         )
         return {"review_id": review_id, "review": review.model_dump(mode="json")}
+    except TimeoutError as exc:
+        logger.warning(f"Review timed out: {exc}")
+        raise HTTPException(status_code=504, detail=str(exc))
     except Exception as exc:
         logger.error(f"Review failed: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))

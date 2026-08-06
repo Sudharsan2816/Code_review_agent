@@ -21,6 +21,8 @@ services:
         value: "true"
       - key: MAX_DIFF_CHARS
         value: "60000"
+      - key: LLM_TIMEOUT_SECONDS
+        value: "180"
       - key: API_AUTH_TOKEN
         generateValue: true
       - key: GITHUB_WEBHOOK_SECRET
