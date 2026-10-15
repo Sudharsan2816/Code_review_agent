@@ -1,7 +1,5 @@
 """Core orchestration service that ties GitHub, LLM, and DB together."""
 
-import asyncio
-
 from loguru import logger
 
 from app.config import get_settings
@@ -12,7 +10,6 @@ from app.services.llm.base import BaseLLMClient
 from app.services.llm.claude_client import ClaudeClient
 from app.services.llm.nvidia_client import NvidiaClient
 from app.services.llm.openai_client import OpenAIClient
-from app.services.review_grounding import ground_review_data
 from app.utils.markdown import review_to_markdown
 
 
@@ -75,51 +72,25 @@ class ReviewService:
             ``require_human_approval`` is ``True`` the comment is NOT posted
             automatically; the caller must call :meth:`approve_and_post`.
         """
-        # 1. Fetch diff
-        pr_diff = self._github.fetch_pr_diff(repo_name, pr_number)
+        # The pipeline runs as a LangGraph StateGraph (see app/agents/review_agent.py):
+        # fetch diff → LLM review → parse → ground → persist → post or hold for approval.
+        from app.agents.review_agent import build_review_graph
 
-        # 2. Build prompt and call LLM
-        prompt = _build_prompt(pr_diff)
-        try:
-            async with asyncio.timeout(self._settings.llm_timeout_seconds):
-                raw = await self._llm.generate_review(prompt)
-        except TimeoutError as exc:
-            timeout = self._settings.llm_timeout_seconds
-            logger.error("LLM provider timed out after {} seconds", timeout)
-            raise TimeoutError(
-                f"LLM provider timed out after {timeout:g} seconds"
-            ) from exc
+        graph = getattr(self, "_graph", None)
+        if graph is None:
+            graph = build_review_graph(self)
+            self._graph = graph
 
-        # 3. Parse structured response
-        data = await self._llm.parse_review_response(raw)
-        grounded = ground_review_data(data, pr_diff)
-        review = CodeReview(
-            repo=repo_name,
-            pr_number=pr_number,
-            pr_title=pr_diff.pr_title,
-            pr_url=pr_diff.pr_url,
-            llm_provider=self._settings.llm_provider,
-            bugs=grounded.bugs,
-            security=grounded.security,
-            performance=grounded.performance,
-            code_quality=grounded.code_quality,
-            suggested_fixes=grounded.suggested_fixes,
-            scores=grounded.scores,
-            final_verdict=grounded.final_verdict,
-            summary=grounded.summary,
+        final = await graph.ainvoke(
+            {
+                "repo": repo_name,
+                "pr_number": pr_number,
+                "post_comment": post_comment,
+                "logs": [],
+            }
         )
-
-        # 4. Persist to MongoDB
-        review_id = await self._db.save_review(review)
-
-        # 5. Post to GitHub unless human approval is required
-        if post_comment and not self._settings.require_human_approval:
-            markdown = review_to_markdown(review)
-            self._github.post_review_comment(repo_name, pr_number, markdown)
-            review.posted_to_github = True
-            await self._db.update_review_approval(review_id, "auto", posted=True)
-
-        return review, review_id
+        logger.debug("Review graph steps: {}", " → ".join(final.get("logs", [])))
+        return final["review"], final["review_id"]
 
     async def approve_and_post(self, review_id: str, approved_by: str) -> str:
         """
