@@ -2,7 +2,7 @@
 
 FastAPI service that reviews GitHub pull requests with an LLM and can post structured review comments back to GitHub.
 
-This project is a backend/AI engineering showcase: it combines GitHub API integration, structured LLM output parsing, MongoDB persistence, optional human approval, and a LangGraph-compatible review pipeline.
+Every review runs as a LangGraph StateGraph: fetch diff, LLM review, parse, ground findings against the diff, persist to MongoDB, then either post the comment or hold it for human approval.
 
 ## What It Does
 
@@ -13,19 +13,19 @@ This project is a backend/AI engineering showcase: it combines GitHub API integr
 - Stores review history in MongoDB.
 - Posts a GitHub PR comment when automatic posting is enabled.
 - Supports a human approval gate before publishing review comments.
-- Exposes a LangGraph-compatible pipeline for future multi-agent extensions.
+- Rejects webhook calls without a valid `X-Hub-Signature-256` HMAC-SHA256 signature.
+- Requires an API token on manual review and approval routes.
 
 ## Architecture
 
 ```text
-GitHub PR webhook / API request
+GitHub PR webhook (HMAC verified) / API request (token)
   -> FastAPI route
-  -> GitHubService fetches PR diff
-  -> ReviewService builds prompt
-  -> Claude/OpenAI client generates structured review
-  -> Pydantic models validate review
-  -> MongoDB stores review history
-  -> GitHubService optionally posts markdown comment
+  -> ReviewService.run_review executes the LangGraph StateGraph:
+       fetch_diff -> llm_review -> parse_response -> build_review -> persist_review
+         -> post_comment            (auto-posting allowed)
+         -> END, pending approval   (REQUIRE_HUMAN_APPROVAL=true)
+  -> POST /review/approve posts a held review after a human approves it
 ```
 
 ## Tech Stack
@@ -34,7 +34,7 @@ GitHub PR webhook / API request
 - PyGithub for GitHub PR and comment operations
 - Anthropic Claude and OpenAI provider support
 - MongoDB with Motor/PyMongo
-- LangGraph-compatible orchestration module
+- LangGraph StateGraph orchestration
 - Loguru structured application logging
 
 ## API Endpoints
@@ -83,28 +83,17 @@ curl -X POST http://localhost:8000/review \
   }'
 ```
 
-## Recruiter Notes
+## Engineering Highlights
 
-This repo demonstrates:
+- Webhook payloads are trusted only after HMAC-SHA256 verification.
+- The LLM provider sits behind one interface (Claude, OpenAI, NVIDIA).
+- Findings are validated into typed models and grounded against changed lines before saving.
+- Posting to GitHub is a conditional branch in the graph, so the approval gate is part of the pipeline itself.
 
-- Backend API design around real external systems.
-- LLM provider abstraction instead of hardcoding one model.
-- Typed structured output validation.
-- GitHub webhook and PR-comment workflow knowledge.
-- Human-in-the-loop approval design for risky automated actions.
-- A path toward multi-agent code review using LangGraph.
+## Known Gaps
 
-## Current Production Gaps
-
-- Add webhook signature verification before trusting GitHub payloads.
-- Add rate limiting and API authentication.
-- Add more tests around LLM parsing and GitHub comment rendering.
+- Add rate limiting on the API routes.
 - Add Docker Compose for API plus MongoDB.
-- Add CI coverage for unit tests and linting.
-- Add deployment docs for Render/Railway/Fly.io.
+- Add idempotency for repeated webhook deliveries of the same commit.
+- Add linting to CI.
 
-## Recommended Public Metadata
-
-- Recommended repo name: `ai-code-review-agent`
-- Description: `AI-powered GitHub PR review service with FastAPI, GitHub webhooks, Anthropic/OpenAI support, MongoDB review history, and LangGraph orchestration.`
-- Topics: `python`, `fastapi`, `github-api`, `llm`, `anthropic`, `openai`, `mongodb`, `langgraph`, `code-review`, `backend`
