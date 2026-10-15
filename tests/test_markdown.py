@@ -13,6 +13,7 @@ def test_review_to_markdown_renders_scores_and_findings():
             FindingItem(
                 file="app.py",
                 line=12,
+                evidence="request.body()",
                 description="Missing signature validation",
                 severity="high",
             )
@@ -28,4 +29,5 @@ def test_review_to_markdown_renders_scores_and_findings():
     assert "**REQUEST_CHANGES**" in markdown
     assert "| Security | 4/10 |" in markdown
     assert "[HIGH] Missing signature validation - `app.py` line 12" in markdown
+    assert "Evidence: `request.body()`" in markdown
     assert "ð" not in markdown

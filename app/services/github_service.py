@@ -118,8 +118,8 @@ class GitHubService:
         """
         secret = get_settings().github_webhook_secret
         if not secret:
-            logger.warning("GITHUB_WEBHOOK_SECRET not set — skipping signature check")
-            return True
+            logger.error("GITHUB_WEBHOOK_SECRET is not configured")
+            return False
 
         expected = "sha256=" + hmac.new(
             secret.encode(), payload, hashlib.sha256
