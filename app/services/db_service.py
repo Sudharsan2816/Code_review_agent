@@ -6,9 +6,14 @@ from typing import Optional
 from bson import ObjectId
 from loguru import logger
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
 
 from app.config import get_settings
 from app.models.review import CodeReview
+
+# How long a webhook claim is remembered. Redeliveries come within minutes or
+# hours; after this, the claim expires and the collection stays small.
+CLAIM_TTL_SECONDS = 30 * 24 * 3600
 
 
 class DatabaseService:
@@ -18,10 +23,40 @@ class DatabaseService:
         settings = get_settings()
         self._client: AsyncIOMotorClient = AsyncIOMotorClient(settings.mongodb_uri)
         self._db: AsyncIOMotorDatabase = self._client[settings.mongodb_db_name]
+        self._claims_indexed = False
 
     @property
     def reviews(self):
         return self._db["reviews"]
+
+    @property
+    def review_claims(self):
+        return self._db["review_claims"]
+
+    async def claim_review(self, key: str) -> bool:
+        """
+        Record that a webhook-triggered review for ``key`` has started.
+
+        ``key`` identifies one pull request at one head commit. It is stored as
+        the document ``_id``, which MongoDB keeps unique, so when two deliveries
+        race, exactly one insert succeeds. Returns ``False`` for a duplicate.
+        """
+        if not self._claims_indexed:
+            await self.review_claims.create_index(
+                "created_at", expireAfterSeconds=CLAIM_TTL_SECONDS
+            )
+            self._claims_indexed = True
+        try:
+            await self.review_claims.insert_one(
+                {"_id": key, "created_at": datetime.utcnow()}
+            )
+            return True
+        except DuplicateKeyError:
+            return False
+
+    async def release_review_claim(self, key: str) -> None:
+        """Forget a claim so that a redelivery can retry a review that failed."""
+        await self.review_claims.delete_one({"_id": key})
 
     async def save_review(self, review: CodeReview) -> str:
         """

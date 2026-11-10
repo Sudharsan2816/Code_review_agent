@@ -86,6 +86,7 @@ curl -X POST http://localhost:8000/review \
 ## Engineering Highlights
 
 - Webhook payloads are trusted only after HMAC-SHA256 verification.
+- Each pull request is reviewed once per head commit: the webhook claims `repo#pr@sha` as a MongoDB `_id` before starting, so redeliveries are acknowledged as duplicates. A failed review releases its claim so GitHub's redelivery can retry it.
 - The LLM provider sits behind one interface (Claude, OpenAI, NVIDIA).
 - Findings are validated into typed models and grounded against changed lines before saving.
 - Posting to GitHub is a conditional branch in the graph, so the approval gate is part of the pipeline itself.
@@ -94,6 +95,5 @@ curl -X POST http://localhost:8000/review \
 
 - Add rate limiting on the API routes.
 - Add Docker Compose for API plus MongoDB.
-- Add idempotency for repeated webhook deliveries of the same commit.
 - Add linting to CI.
 
