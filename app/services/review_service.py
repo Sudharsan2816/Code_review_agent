@@ -92,6 +92,14 @@ class ReviewService:
         logger.debug("Review graph steps: {}", " → ".join(final.get("logs", [])))
         return final["review"], final["review_id"]
 
+    async def claim_webhook_review(self, key: str) -> bool:
+        """Return False if a review for this PR head commit has already started."""
+        return await self._db.claim_review(key)
+
+    async def release_webhook_review(self, key: str) -> None:
+        """Let a later delivery of the same commit try again after a failure."""
+        await self._db.release_review_claim(key)
+
     async def approve_and_post(self, review_id: str, approved_by: str) -> str:
         """
         Retrieve a pending review, post it to GitHub, and mark it approved.
